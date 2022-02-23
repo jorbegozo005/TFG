@@ -6,7 +6,7 @@
 //#include "nbodyJorge.h"
 
 int nplanetas, tamano, dimensiones, N, xyz, gmax;
-float *d_Gm, *d_aux, *d_q, *d_ddq;
+//float *d_Gm, *d_aux, *d_q, *d_ddq;
 bool gpu;
 
 //#include "nbodyJorge.h"
@@ -22,21 +22,16 @@ __global__
 void NbodyODE2Tpgpuaux(int gmax, int nplanetas, int xyz, int tamano, int dimensiones, int N, float *Gm, float *aux, float *q, float *ddq) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    //int i = threadIdx.x;
-    //int j = threadIdx.y;
+    //int j = blockIdx.x * blockDim.x + threadIdx.x;
 
-    float Gmi, Gmj;
-    //float Gmi;
+    float Gmi;
+    printf("Antes del if %d\n",i);
 
-    if (i < nplanetas && j < nplanetas && i < j) {
-    //if (i < nplanetas) {
-    //for (int i=0; i<nplanetas; i++) {
+    if (i < nplanetas) {
+        printf("Entra %d\n",i);
         Gmi = Gm[i];
-        //for (int j=i+1; j<nplanetas; j++) {
-        //   float Gmj = Gm[j];
-        //Gmi = Gm[i];
-        Gmj = Gm[j];
+        for (int j=i+1; j<nplanetas; j++) {
+            float Gmj = Gm[j];
         
             for (int k=0; k<dimensiones; k++) {
                 aux[k*N+0] = q[k*tamano+0+i*xyz] - q[k*tamano+0+j*xyz];
@@ -89,30 +84,57 @@ void NbodyODE2Tpgpuaux(int gmax, int nplanetas, int xyz, int tamano, int dimensi
                 ddq[k*tamano+2+j*xyz] += Gmi*aux[k*N+5];
             }
         }
-    //}
-    
+    }    
+}
+
+__global__
+void NuevoGradogpu(nplanetas, xyz, tamano, zat, zat2, k, gmax, nu, nddu) {
+    int body, koor;
+
+    body = blockIdx.x;
+    koor = threadIdx.x;
+
+    if (body < nplanetas && koor < xyz) {
+        nu[(k-1)*tamano+koor*nplanetas+body] =nddu[(k-3)*tamano+koor*nplanetas+body]/zat;
+        if (k < gmax)
+            nu[k*tamano+koor*nplanetas+body] =nddu[(k-2)*tamano+koor*nplanetas+body]/zat2;
+    }
+
 }
 
 void NbodyODE2Tpgpu(float *ddq, float *q, float *Gm, float *aux) {
-    
+
+    float *d_Gm, *d_aux, *d_q, *d_ddq;
+
     for (int i=0; i<tamano*gmax; i++) {
         ddq[i] = 0.0;
     }
-    
-    /*cudaMemcpy(d_Gm, Gm, nplanetas*sizeof(float), cudaMemcpyHostToDevice);
+
+    cudaMalloc(&d_Gm, nplanetas*sizeof(float)); 
+    cudaMalloc(&d_aux, N*xyz*sizeof(float));
+    cudaMalloc(&d_q, tamano*gmax*sizeof(float)); 
+    cudaMalloc(&d_ddq, tamano*gmax*sizeof(float));
+        
+    cudaMemcpy(d_Gm, Gm, nplanetas*sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_aux, aux, N*xyz*sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_q, q, tamano*gmax*sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_ddq, ddq, tamano*gmax*sizeof(float), cudaMemcpyHostToDevice);*/
+    cudaMemcpy(d_ddq, ddq, tamano*gmax*sizeof(float), cudaMemcpyHostToDevice);
 
     //int threadsPerBlock = 256;
     //int blocksPerGrid = (nplanetas + threadsPerBlock - 1) / threadsPerBlock;
-    
-    NbodyODE2Tpgpuaux<<<(xyz*tamano*dimensiones)/32, 32>>>(gmax, nplanetas, xyz, tamano, dimensiones, N, d_Gm, d_aux, d_q, d_ddq);
 
-    /*cudaMemcpy(Gm, d_Gm, nplanetas*sizeof(float), cudaMemcpyHostToDevice);
+    printf("Antes\n");
+    
+    NbodyODE2Tpgpuaux<<<2, nplanetas>>>(gmax, nplanetas, xyz, tamano, dimensiones, N, d_Gm, d_aux, d_q, d_ddq);
+
+    cudaDeviceSynchronize();
+
+    printf("Sinc\n");
+
+    cudaMemcpy(Gm, d_Gm, nplanetas*sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(aux, d_aux, N*xyz*sizeof(float), cudaMemcpyDeviceToHost);
     cudaMemcpy(q, d_q, tamano*gmax*sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(ddq, d_ddq, tamano*gmax*sizeof(float), cudaMemcpyDeviceToHost);*/
+    cudaMemcpy(ddq, d_ddq, tamano*gmax*sizeof(float), cudaMemcpyDeviceToHost);
 }
 
 void inicializarGlobales() {
@@ -134,6 +156,7 @@ void NbodyODE2Tp(float *ddq, float *q, float *Gm, float *aux) {
     for (int i=0; i<nplanetas; i++) {
         float Gmi = Gm[i];
         for (int j=i+1; j<nplanetas; j++) {
+            //printf("%d",j);
            float Gmj = Gm[j];
            for (int k=0; k<dimensiones; k++) {
                aux[k*N+0] = q[k*tamano+0+i*xyz] - q[k*tamano+0+j*xyz];
@@ -192,6 +215,7 @@ void NbodyODE2Tp(float *ddq, float *q, float *Gm, float *aux) {
 
 void TaylorLortuP(float *nu, float *nddu, float *gm, float *aux) {
     int gradua = gmax-1;
+
     for (int i = 0; i<gradua/2; i++) {
         if (gpu) {
             NbodyODE2Tpgpu(nddu,nu,gm,aux);
@@ -282,6 +306,53 @@ void evaluatetaylorv(float *nu, float h) {
     }
 }
 
+void TaylorStepPgpu(float *u, float *ddu, float *gm, float *aux, float h) {
+
+    float *d_Gm, *d_aux, *d_q, *d_ddq, zat, zat2;
+    int gradua, i, k, body, koor;
+
+    for (i=0; i<tamano*gmax; i++) {
+        ddu[i] = 0.0;
+    }
+
+    cudaMalloc(&d_Gm, nplanetas*sizeof(float)); 
+    cudaMalloc(&d_aux, N*xyz*sizeof(float));
+    cudaMalloc(&d_q, tamano*gmax*sizeof(float));
+    cudaMalloc(&d_ddq, tamano*gmax*sizeof(float));
+
+    cudaMemcpy(d_Gm, gm, nplanetas*sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_aux, aux, N*xyz*sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_q, u, tamano*gmax*sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_ddq, ddu, tamano*gmax*sizeof(float), cudaMemcpyHostToDevice);
+    
+    gradua = gmax-1;
+
+    for (i = 0; i<gradua/2; i++) {
+
+        NbodyODE2Tpgpuaux<<<1, nplanetas>>>(gmax, nplanetas, xyz, tamano, dimensiones, N, d_Gm, d_aux, d_q, d_ddq);
+        cudaDeviceSynchronize();
+
+        k = 2*(i+1)+1;
+
+        zat=(k-1)*(k-2);
+        zat2=k*(k-1);
+
+        if (k < gmax) {   
+            dimensiones+=2;
+        } else {
+            dimensiones++;
+        }
+
+        // paralelizado 2
+        NuevoGradogpu<<<nplanetas,xyz>>>(nplanetas, xyz, tamano, zat, zat2, k, gmax, d_q, d_ddq);
+        cudaDeviceSynchronize();
+ 
+    }
+
+    //evaluatetaylorv(); //paralelizado
+
+}
+
 void TaylorStepP(float *u, float *ddu, float *gm, float *aux, float h) {
     TaylorLortuP(u,ddu,gm,aux);
     evaluatetaylorv(u,h);
@@ -292,12 +363,14 @@ void IntegrateTaylorP(float *u, int t0, int tf, float h, float *gm) {
 
     float *ddu;
     ddu = (float *) malloc(tamano*gmax*sizeof(float));
+    //cudaMallocManaged(&ddu, tamano*gmax*sizeof(float));
     for (int i=0; i<tamano*gmax; i++) {
         ddu[i] = 0.0;
     }
 
     float *aux;
     aux = (float *) malloc(N*xyz*sizeof(float));
+    //cudaMallocManaged(&aux, N*xyz*sizeof(float));
     for (int i=0; i<N*xyz; i++) {
         aux[i] = 0.0;
     }
@@ -310,38 +383,19 @@ void IntegrateTaylorP(float *u, int t0, int tf, float h, float *gm) {
         printf("\n");
     }
 
-    if (gpu) {
-        cudaMalloc(&d_Gm, nplanetas*sizeof(float));
-        cudaMalloc(&d_aux, N*xyz*sizeof(float));
-        cudaMalloc(&d_q, tamano*gmax*sizeof(float));
-        cudaMalloc(&d_ddq, tamano*gmax*sizeof(float));
-
-        cudaMemcpy(d_Gm, gm, nplanetas*sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_aux, aux, N*xyz*sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_q, u, tamano*gmax*sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_ddq, ddu, tamano*gmax*sizeof(float), cudaMemcpyHostToDevice);
-    }
-
     int ukop = (tf-t0)/h;
     printf("%d\n", ukop);
-    ukop = 100000;
+    ukop = 2;
     clock_t begin = clock();
     for (int i=1; i<=ukop; i++) {
         if (gpu) {
-            TaylorStepP(u, ddu, gm, aux, h);//TaylorStepP(d_q, d_ddq, d_Gm, d_aux, h);
+            TaylorStepP(u, ddu, gm, aux, h);
         } else {
             TaylorStepP(u, ddu, gm, aux, h);
         }
         dimensiones = 2;
     }
     clock_t end = clock();
-
-    if (gpu) {
-        /*cudaMemcpy(gm, d_Gm, nplanetas*sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(aux, d_aux, N*xyz*sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(u, d_q, tamano*gmax*sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(ddu, d_ddq, tamano*gmax*sizeof(float), cudaMemcpyDeviceToHost);*/
-    }
 
     printf("FINAL");
     for (int i=0; i<gmax; i++){
@@ -354,13 +408,7 @@ void IntegrateTaylorP(float *u, int t0, int tf, float h, float *gm) {
     double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
 
     printf("Tiempo: %f\n", time_spent);
-    
-    if (gpu) {
-        cudaFree(d_Gm);
-        cudaFree(d_aux);
-        cudaFree(d_q);
-        cudaFree(d_ddq);
-    }
+
     free(ddu);
     free(aux);
 }
@@ -454,9 +502,11 @@ int main() {
 
     float *GM;
     GM = (float *) malloc(nplanetas*sizeof(float));
+    //cudaMallocManaged(&GM, nplanetas*sizeof(float));
     
     float *u;
     u = (float *) malloc(tamano*gmax*sizeof(float));
+    //cudaMallocManaged(&u, tamano*gmax*sizeof(float));
 
     initialInnerPlanets(GM, u, tamano);
 
